@@ -25,8 +25,15 @@
     (condp == ch
       quote (let [next-ch (.read reader)]
               (condp == next-ch
-                quote (do (.append sb (char quote))
-                          (recur (.read reader)))
+                quote (let [next-next-ch (.read reader)]
+                        (if (and (not strict)
+                                 (#{sep lf cr eof} next-next-ch))
+                          (do
+                            (.append sb (char quote))
+                            (.unread reader next-next-ch)
+                            (recur next-ch))
+                          (do (.append sb (char quote))
+                              (recur next-next-ch))))
                 sep :sep
                 lf  :eol
                 cr  (let [next-next-ch (.read reader)]
