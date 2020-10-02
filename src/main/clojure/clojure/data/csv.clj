@@ -20,7 +20,7 @@
 (def ^{:private true} cr  (int \return))
 (def ^{:private true} eof -1)
 
-(defn- read-quoted-cell [^PushbackReader reader ^StringBuilder sb sep quote]
+(defn- read-quoted-cell [^PushbackReader reader ^StringBuilder sb sep quote strict]
   (loop [ch (.read reader)]
     (condp == ch
       quote (let [next-ch (.read reader)]
@@ -34,15 +34,20 @@
                         (.unread reader next-next-ch))
                       :eol)
                 eof :eof
-                (throw (Exception. ^String (format "CSV error (unexpected character: %c)" next-ch)))))
-      eof (throw (EOFException. "CSV error (unexpected end of file)"))
+                (if strict
+                  (throw (Exception. ^String (format "CSV error (unexpected character: %c)" next-ch)))
+                  (do (.append sb (char quote))
+                      (recur next-ch)))))
+      eof (if strict
+            (throw (EOFException. "CSV error (unexpected end of file)"))
+            :eof)
       (do (.append sb (char ch))
           (recur (.read reader))))))
 
-(defn- read-cell [^PushbackReader reader ^StringBuilder sb sep quote]
+(defn- read-cell [^PushbackReader reader ^StringBuilder sb sep quote strict]
   (let [first-ch (.read reader)]
     (if (== first-ch quote)
-      (read-quoted-cell reader sb sep quote)
+      (read-quoted-cell reader sb sep quote strict)
       (loop [ch first-ch]
         (condp == ch
           sep :sep
@@ -55,32 +60,32 @@
           (do (.append sb (char ch))
               (recur (.read reader))))))))
 
-(defn- read-record [reader sep quote]
+(defn- read-record [reader sep quote strict]
   (loop [record (transient [])]
     (let [cell (StringBuilder.)
-          sentinel (read-cell reader cell sep quote)]
+          sentinel (read-cell reader cell sep quote strict)]
       (if (= sentinel :sep)
         (recur (conj! record (str cell)))
         [(persistent! (conj! record (str cell))) sentinel]))))
 
 (defprotocol Read-CSV-From
-  (read-csv-from [input sep quote]))
+  (read-csv-from [input sep quote strict]))
 
 (extend-protocol Read-CSV-From
   String
-  (read-csv-from [s sep quote]
-    (read-csv-from (PushbackReader. (StringReader. s)) sep quote))
+  (read-csv-from [s sep quote strict]
+    (read-csv-from (PushbackReader. (StringReader. s)) sep quote strict))
   
   Reader
-  (read-csv-from [reader sep quote]
-    (read-csv-from (PushbackReader. reader) sep quote))
+  (read-csv-from [reader sep quote strict]
+    (read-csv-from (PushbackReader. reader) sep quote strict))
   
   PushbackReader
-  (read-csv-from [reader sep quote] 
+  (read-csv-from [reader sep quote strict]
     (lazy-seq
-     (let [[record sentinel] (read-record reader sep quote)]
+     (let [[record sentinel] (read-record reader sep quote strict)]
        (case sentinel
-	 :eol (cons record (read-csv-from reader sep quote))
+	 :eol (cons record (read-csv-from reader sep quote strict))
 	 :eof (when-not (= record [""])
 		(cons record nil)))))))
 
@@ -92,8 +97,8 @@
      :separator (default \\,)
      :quote (default \\\")"
   [input & options]
-  (let [{:keys [separator quote] :or {separator \, quote \"}} options]
-    (read-csv-from input (int separator) (int quote))))
+  (let [{:keys [separator quote strict] :or {separator \, quote \" strict true}} options]
+    (read-csv-from input (int separator) (int quote) strict)))
 
 
 ;; Writing
